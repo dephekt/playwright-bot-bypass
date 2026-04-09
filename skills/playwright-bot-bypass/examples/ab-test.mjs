@@ -4,99 +4,100 @@
  * Compare bot detection between standard playwright and stealth mode
  *
  * Usage: node ab-test.mjs
+ * Requires: npm install rebrowser-playwright playwright
  */
 
-import { chromium } from 'playwright';
-import { chromium as stealthChromium } from 'rebrowser-playwright';
+import { createStealthBrowser } from '../scripts/stealth-template.mjs';
 
-console.log('═══════════════════════════════════════════');
+let chromiumStandard;
+try {
+  const pw = await import('playwright');
+  chromiumStandard = pw.chromium;
+} catch {
+  console.error('Standard "playwright" package not installed.');
+  console.error('Run: npm install playwright && npx playwright install chromium');
+  console.error('\nSkipping A side — running stealth-only test.\n');
+}
+
+console.log('='.repeat(45));
 console.log('      A/B TEST: Detected vs Stealth        ');
-console.log('═══════════════════════════════════════════\n');
+console.log('='.repeat(45) + '\n');
 
-// A: Standard Playwright (will be detected)
-console.log('[A] Starting standard Playwright...');
-const browserA = await chromium.launch({
-  headless: false,
-  channel: 'chrome',
-  args: ['--window-position=0,0']
-});
-const contextA = await browserA.newContext({
-  viewport: { width: 640, height: 700 }
-});
-const pageA = await contextA.newPage();
+let browserA, browserB;
 
-// B: Stealth mode (will bypass detection)
-console.log('[B] Starting stealth Rebrowser...');
-const browserB = await stealthChromium.launch({
-  headless: false,
-  channel: 'chrome',
-  args: ['--window-position=660,0']
-});
-const contextB = await browserB.newContext({
-  viewport: { width: 640, height: 700 }
-});
-await contextB.addInitScript(() => {
-  delete Object.getPrototypeOf(navigator).webdriver;
-});
-const pageB = await contextB.newPage();
+try {
+  // A: Standard Playwright (will be detected)
+  let resultA = { webdriver: 'skipped', renderer: 'skipped' };
+  if (chromiumStandard) {
+    console.log('[A] Starting standard Playwright...');
+    browserA = await chromiumStandard.launch({
+      headless: false,
+      channel: 'chrome',
+      args: ['--window-position=0,0']
+    });
+    const contextA = await browserA.newContext({ viewport: { width: 640, height: 700 } });
+    const pageA = await contextA.newPage();
 
-// Navigate both to bot detection site
-console.log('\n📡 Opening bot detection test site...\n');
-await Promise.all([
-  pageA.goto('https://bot.sannysoft.com', { waitUntil: 'networkidle' }),
-  pageB.goto('https://bot.sannysoft.com', { waitUntil: 'networkidle' })
-]);
+    await pageA.goto('https://bot.sannysoft.com', { waitUntil: 'networkidle' });
+    await pageA.waitForSelector('table tr td', { timeout: 10000 });
 
-// Wait for test tables to render on both pages
-await Promise.all([
-  pageA.waitForSelector('table tr td', { timeout: 10000 }),
-  pageB.waitForSelector('table tr td', { timeout: 10000 })
-]);
+    resultA = await pageA.evaluate(() => {
+      const get = (name) => {
+        for (const row of document.querySelectorAll('table tr')) {
+          if (row.textContent.includes(name)) {
+            const cells = row.querySelectorAll('td');
+            return cells.length >= 2 ? cells[1].textContent.trim() : 'N/A';
+          }
+        }
+        return 'N/A';
+      };
+      return { webdriver: get('WebDriver'), renderer: get('WebGL Renderer') };
+    });
 
-// Check WebDriver status
-const resultA = await pageA.evaluate(() => {
-  const rows = document.querySelectorAll('table tr');
-  for (const row of rows) {
-    if (row.textContent.includes('WebDriver')) {
-      const cells = row.querySelectorAll('td');
-      if (cells.length >= 2) {
-        return cells[1].textContent.trim();
-      }
-    }
+    await pageA.screenshot({ path: '/tmp/ab-test-detected.png' });
   }
-  return 'unknown';
-});
 
-const resultB = await pageB.evaluate(() => {
-  const rows = document.querySelectorAll('table tr');
-  for (const row of rows) {
-    if (row.textContent.includes('WebDriver')) {
-      const cells = row.querySelectorAll('td');
-      if (cells.length >= 2) {
-        return cells[1].textContent.trim();
+  // B: Stealth mode (will bypass detection)
+  console.log('[B] Starting stealth Rebrowser...');
+  const { browser, page: pageB } = await createStealthBrowser({
+    viewport: { width: 640, height: 700 }
+  });
+  browserB = browser;
+
+  await pageB.goto('https://bot.sannysoft.com', { waitUntil: 'networkidle' });
+  await pageB.waitForSelector('table tr td', { timeout: 10000 });
+
+  const resultB = await pageB.evaluate(() => {
+    const get = (name) => {
+      for (const row of document.querySelectorAll('table tr')) {
+        if (row.textContent.includes(name)) {
+          const cells = row.querySelectorAll('td');
+          return cells.length >= 2 ? cells[1].textContent.trim() : 'N/A';
+        }
       }
-    }
-  }
-  return 'unknown';
-});
+      return 'N/A';
+    };
+    return { webdriver: get('WebDriver'), renderer: get('WebGL Renderer') };
+  });
 
-console.log('═══════════════════════════════════════════');
-console.log('               RESULTS                     ');
-console.log('═══════════════════════════════════════════');
-console.log(`[A] Standard Playwright: ${resultA.includes('failed') ? '❌ DETECTED' : '✅ Passed'}`);
-console.log(`    WebDriver: ${resultA}`);
-console.log(`[B] Stealth Rebrowser:   ${resultB.includes('passed') || resultB.includes('missing') ? '✅ BYPASSED' : '❌ Detected'}`);
-console.log(`    WebDriver: ${resultB}`);
-console.log('═══════════════════════════════════════════\n');
+  await pageB.screenshot({ path: '/tmp/ab-test-stealth.png' });
 
-// Screenshots
-await Promise.all([
-  pageA.screenshot({ path: 'ab-test-detected.png' }),
-  pageB.screenshot({ path: 'ab-test-stealth.png' })
-]);
-console.log('📸 Screenshots saved: ab-test-detected.png, ab-test-stealth.png\n');
+  // Results
+  console.log('\n' + '='.repeat(45));
+  console.log('               RESULTS                     ');
+  console.log('='.repeat(45));
+  console.log(`[A] Standard:  WebDriver=${resultA.webdriver}`);
+  console.log(`               Renderer=${resultA.renderer}`);
+  console.log(`[B] Stealth:   WebDriver=${resultB.webdriver}`);
+  console.log(`               Renderer=${resultB.renderer}`);
+  console.log('='.repeat(45));
+  console.log('\nScreenshots: /tmp/ab-test-detected.png, /tmp/ab-test-stealth.png\n');
 
-await browserA.close();
-await browserB.close();
+} catch (err) {
+  console.error('Error:', err.message);
+} finally {
+  await browserA?.close().catch(() => {});
+  await browserB?.close().catch(() => {});
+}
 
 console.log('Done!');

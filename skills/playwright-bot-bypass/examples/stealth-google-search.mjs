@@ -1,76 +1,65 @@
 #!/usr/bin/env node
 /**
  * Stealth Google Search Example
- * Demonstrates bot-detection-free Google search
+ * Demonstrates bot-detection-free Google search with human-like typing
  *
  * Usage: node stealth-google-search.mjs "search query"
+ * Requires: npm install rebrowser-playwright
  */
 
-import { chromium } from 'rebrowser-playwright';
+import { createStealthBrowser, humanType, humanDelay, simulateMouseMovement } from '../scripts/stealth-template.mjs';
 
 const searchQuery = process.argv[2] || 'Playwright automation';
 
 async function stealthGoogleSearch(query) {
-  console.log(`🔍 Searching Google for: "${query}"\n`);
+  console.log(`Searching Google for: "${query}"\n`);
 
-  const browser = await chromium.launch({
-    headless: false,
-    channel: 'chrome'
-  });
+  const { browser, page } = await createStealthBrowser();
 
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 800 }
-  });
+  try {
+    await page.goto('https://www.google.com', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('textarea[name="q"]', { timeout: 10000 });
 
-  // Apply stealth patches
-  await context.addInitScript(() => {
-    delete Object.getPrototypeOf(navigator).webdriver;
-  });
+    // Simulate natural mouse movement before typing
+    await simulateMouseMovement(page);
 
-  const page = await context.newPage();
+    // Human-like typing instead of instant fill
+    await humanType(page, 'textarea[name="q"]', query);
+    await humanDelay(300, 800);
+    await page.press('textarea[name="q"]', 'Enter');
 
-  // Navigate to Google
-  await page.goto('https://www.google.com', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('div.g, #captcha, #sorry', { timeout: 10000 }).catch(() => {});
 
-  // Wait for search box to be ready
-  await page.waitForSelector('textarea[name="q"]', { timeout: 10000 });
+    const url = page.url();
+    if (url.includes('sorry')) {
+      console.log('CAPTCHA detected! Bot detection triggered.');
+    } else {
+      console.log('Search successful! No CAPTCHA.');
 
-  // Enter search query and submit
-  await page.fill('textarea[name="q"]', query);
-  await page.press('textarea[name="q"]', 'Enter');
-
-  // Wait for search results to load
-  await page.waitForSelector('div.g, #captcha, #sorry', { timeout: 10000 }).catch(() => {});
-
-  // Check if we got blocked
-  const url = page.url();
-  if (url.includes('sorry')) {
-    console.log('❌ CAPTCHA detected! Bot detection triggered.');
-  } else {
-    console.log('✅ Search successful! No CAPTCHA.');
-
-    // Get search results
-    const results = await page.evaluate(() => {
-      const items = document.querySelectorAll('div.g');
-      return Array.from(items).slice(0, 5).map(item => {
-        const title = item.querySelector('h3')?.textContent || '';
-        const link = item.querySelector('a')?.href || '';
-        return { title, link };
+      const results = await page.evaluate(() => {
+        const items = document.querySelectorAll('div.g');
+        return Array.from(items).slice(0, 5).map(item => {
+          const title = item.querySelector('h3')?.textContent || '';
+          const link = item.querySelector('a')?.href || '';
+          return { title, link };
+        });
       });
-    });
 
-    console.log('\n📋 Top Results:');
-    results.forEach((r, i) => {
-      console.log(`${i + 1}. ${r.title}`);
-      console.log(`   ${r.link}\n`);
-    });
+      console.log('\nTop Results:');
+      results.forEach((r, i) => {
+        console.log(`${i + 1}. ${r.title}`);
+        console.log(`   ${r.link}\n`);
+      });
+    }
+
+    await page.screenshot({ path: '/tmp/google-search-result.png' });
+    console.log('Screenshot saved: /tmp/google-search-result.png\n');
+  } catch (err) {
+    console.error('Error:', err.message);
+    await page.screenshot({ path: '/tmp/google-search-error.png' }).catch(() => {});
+  } finally {
+    await browser.close();
   }
-
-  // Save screenshot
-  await page.screenshot({ path: 'google-search-result.png' });
-  console.log('📸 Screenshot saved: google-search-result.png\n');
-
-  await browser.close();
 }
 
 stealthGoogleSearch(searchQuery).catch(console.error);
