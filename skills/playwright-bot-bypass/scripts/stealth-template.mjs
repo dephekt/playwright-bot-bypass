@@ -84,6 +84,7 @@ export async function createStealthBrowser(options = {}) {
           { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
           { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' }
         ];
+        arr.forEach(p => p.__proto__ = Plugin.prototype); // each item must be Plugin-typed too
         arr.__proto__ = PluginArray.prototype;
         return arr;
       }
